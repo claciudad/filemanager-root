@@ -1,5 +1,7 @@
-![logo](https://github.com/nda-web/filemanager-root/blob/main/Screenshot_20241104_224332.png)
 ![logo](https://github.com/nda-web/filemanager-root/blob/main/Screenshot_20241104_224303.png)
+
+![logo](https://github.com/nda-web/filemanager-root/blob/main/Screenshot_20241104_224332.png)
+
 # FileManager as Root Script
 
 Este script permite abrir un gestor de archivos como usuario root utilizando `pkexec`, proporcionando una forma conveniente de acceder a archivos del sistema con privilegios elevados.
