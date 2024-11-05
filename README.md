@@ -15,7 +15,7 @@ El script verifica qué gestores de archivos están instalados en el sistema, se
 
 1. Clone o descargue este repositorio.
    ```sh
-   git clone <URL_del_repositorio>
+   git clone https://github.com/nda-web/filemanager-root.git
    ```
 2. Dé permisos de ejecución al script:
    ```sh
