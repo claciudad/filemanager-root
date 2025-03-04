@@ -22,6 +22,17 @@ function check_command {
     command -v "$1" &> /dev/null || { print_msg "Error: $1 no está instalado."; exit 1; }
 }
 
+# Función para preguntar si se desea reintentar una operación
+function ask_retry {
+    print_msg "¿Desea reintentar la operación? (s/n)"
+    read respuesta
+    if [[ "$respuesta" == "s" || "$respuesta" == "S" ]]; then
+        return 0  # Retornar éxito para reintentar
+    else
+        return 1  # Retornar fallo para cancelar
+    fi
+}
+
 # Función para configurar variables de entorno
 function set_env_vars {
     export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
@@ -53,6 +64,92 @@ function detect_system {
 
     print_msg "Distribución: $DISTRO"
     print_msg "Entorno de escritorio: $DESKTOP_ENV"
+    
+    # Verificar las dependencias para Fedora, Gentoo, FreeBSD, Ubuntu, Debian, Arch, openSUSE, CentOS, Alpine y Slackware
+    case "$DISTRO" in
+        "Fedora"*)
+            print_msg "Detectado Fedora. Asegurando que pkexec y dbus están instalados."
+            if ! command -v pkexec &> /dev/null; then
+                sudo dnf install -y polkit
+            fi
+            if ! command -v dbus-daemon &> /dev/null; then
+                sudo dnf install -y dbus
+            fi
+            ;;
+        "Gentoo"*)
+            print_msg "Detectado Gentoo. Asegurando que pkexec y dbus están instalados."
+            if ! command -v pkexec &> /dev/null; then
+                sudo emerge -aq sys-auth/polkit
+            fi
+            if ! command -v dbus-daemon &> /dev/null; then
+                sudo emerge -aq sys-apps/dbus
+            fi
+            ;;
+        "FreeBSD"*)
+            print_msg "Detectado FreeBSD. Usando pkg para instalar dependencias."
+            check_command pkg
+            pkg install -y dbus polkit
+            check_command pkexec
+            check_command dbus-daemon
+            ;;
+        "Ubuntu"* | "Debian"*)
+            print_msg "Detectado Ubuntu/Debian. Asegurando que pkexec y dbus están instalados."
+            if ! command -v pkexec &> /dev/null; then
+                sudo apt-get install -y policykit-1
+            fi
+            if ! command -v dbus-daemon &> /dev/null; then
+                sudo apt-get install -y dbus
+            fi
+            ;;
+        "Arch"*)
+            print_msg "Detectado Arch Linux. Asegurando que pkexec y dbus están instalados."
+            if ! command -v pkexec &> /dev/null; then
+                sudo pacman -S --noconfirm polkit
+            fi
+            if ! command -v dbus-daemon &> /dev/null; then
+                sudo pacman -S --noconfirm dbus
+            fi
+            ;;
+        "openSUSE"*)
+            print_msg "Detectado openSUSE. Asegurando que pkexec y dbus están instalados."
+            if ! command -v pkexec &> /dev/null; then
+                sudo zypper install -y polkit
+            fi
+            if ! command -v dbus-daemon &> /dev/null; then
+                sudo zypper install -y dbus-1
+            fi
+            ;;
+        "CentOS"*)
+            print_msg "Detectado CentOS. Asegurando que pkexec y dbus están instalados."
+            if ! command -v pkexec &> /dev/null; then
+                sudo yum install -y polkit
+            fi
+            if ! command -v dbus-daemon &> /dev/null; then
+                sudo yum install -y dbus
+            fi
+            ;;
+        "Alpine"*)
+            print_msg "Detectado Alpine Linux. Asegurando que pkexec y dbus están instalados."
+            if ! command -v pkexec &> /dev/null; then
+                sudo apk add polkit
+            fi
+            if ! command -v dbus-daemon &> /dev/null; then
+                sudo apk add dbus
+            fi
+            ;;
+        "Slackware"*)
+            print_msg "Detectado Slackware. Asegurando que pkexec y dbus están instalados."
+            if ! command -v pkexec &> /dev/null; then
+                sudo slackpkg install polkit
+            fi
+            if ! command -v dbus-daemon &> /dev/null; then
+                sudo slackpkg install dbus
+            fi
+            ;;
+        *)
+            print_msg "Distribución no soportada explícitamente, pero procediendo con los pasos genéricos."
+            ;;
+    esac
 }
 
 # Función para detectar la versión del gestor de archivos
@@ -70,11 +167,6 @@ if [[ "$1" == "-q" ]]; then
     quiet_mode=true
     shift
 fi
-
-# Verificar dependencias esenciales
-check_command pkexec
-check_command xhost
-check_command dbus-daemon
 
 # Configurar variables de entorno
 set_env_vars
@@ -106,6 +198,11 @@ fi
 # Detectar la versión del gestor de archivos
 FILE_MANAGER_VERSION=$(get_file_manager_version)
 print_msg "Gestor de archivos detectado: $FILE_MANAGER (versión $FILE_MANAGER_VERSION)"
+
+# Advertir sobre versiones específicas del gestor
+if [[ "$FILE_MANAGER_VERSION" == "4.0"* ]]; then
+    print_msg "Advertencia: Esta versión de $FILE_MANAGER puede requerir ajustes adicionales."
+fi
 
 # Avisar antes de realizar cambios
 print_msg "Este script realizará los siguientes cambios en el sistema:"
@@ -140,8 +237,18 @@ print_msg "Enlace simbólico creado: use 'filemanager-root' para abrir el gestor
 
 # Crear un archivo .desktop para abrir el gestor de archivos como root
 DESKTOP_FILE="/usr/share/applications/filemanager-root.desktop"
-if [ ! -f "$DESKTOP_FILE" ]; then
-    pkexec bash -c "cat <<EOF > $DESKTOP_FILE
+if [ -f "$DESKTOP_FILE" ]; then
+    print_msg "El archivo .desktop ya existe. ¿Desea sobrescribirlo? (s/n)"
+    if [ "$quiet_mode" = false ]; then
+        read respuesta
+        if [[ "$respuesta" != "s" && "$respuesta" != "S" ]]; then
+            print_msg "Operación cancelada."
+            exit 0
+        fi
+    fi
+fi
+
+pkexec bash -c "cat <<EOF > $DESKTOP_FILE
 [Desktop Entry]
 Version=1.0
 Name=File Manager Root
@@ -151,8 +258,7 @@ Terminal=false
 Type=Application
 Categories=Utility;System;
 EOF"
-    print_msg "Archivo .desktop creado: se puede acceder al gestor de archivos como root desde el menú de aplicaciones."
-fi
+print_msg "Archivo .desktop creado: se puede acceder al gestor de archivos como root desde el menú de aplicaciones."
 
 # Ejecutar el gestor de archivos como root usando pkexec
 if ! pkexec env DISPLAY=$DISPLAY XAUTHORITY=$XAUTHORITY XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS GTK_THEME=$GTK_THEME LC_ALL=$LC_ALL LANG=$LANG "$FILE_MANAGER" "$@"; then
