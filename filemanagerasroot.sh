@@ -10,8 +10,59 @@
 # Activar modo de depuración (descomentar para debug)
 # set -x
 
-# Asegurar que tenemos el PATH completo
-export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+# Función para imprimir mensajes si no está en modo silencioso
+function print_msg {
+    if [ "$quiet_mode" = false ]; then
+        echo "$1"
+    fi
+}
+
+# Función para verificar la presencia de comandos esenciales
+function check_command {
+    command -v "$1" &> /dev/null || { print_msg "Error: $1 no está instalado."; exit 1; }
+}
+
+# Función para configurar variables de entorno
+function set_env_vars {
+    export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    export DISPLAY="${DISPLAY:-:0}"
+    export XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}"
+    export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+    export GTK_THEME="${GTK_THEME:-Adwaita}"
+    export LC_ALL="${LC_ALL:-en_US.UTF-8}"
+    export LANG="${LANG:-en_US.UTF-8}"
+}
+
+# Función para detectar la distribución y el entorno de escritorio
+function detect_system {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        DISTRO=$NAME
+    else
+        DISTRO="Desconocida"
+    fi
+
+    if [ -n "$XDG_CURRENT_DESKTOP" ]; then
+        DESKTOP_ENV=$XDG_CURRENT_DESKTOP
+    elif [ -n "$DESKTOP_SESSION" ]; then
+        DESKTOP_ENV=$DESKTOP_SESSION
+    else
+        DESKTOP_ENV="Desconocido"
+    fi
+
+    print_msg "Distribución: $DISTRO"
+    print_msg "Entorno de escritorio: $DESKTOP_ENV"
+}
+
+# Función para detectar la versión del gestor de archivos
+function get_file_manager_version {
+    if command -v "$FILE_MANAGER" &> /dev/null; then
+        "$FILE_MANAGER" --version | head -n 1 | awk '{print $2}'
+    else
+        echo "unknown"
+    fi
+}
 
 # Revisar si se pasa la opción "-q" para modo silencioso
 quiet_mode=false
@@ -20,19 +71,25 @@ if [[ "$1" == "-q" ]]; then
     shift
 fi
 
-# Función para imprimir mensajes si no está en modo silencioso
-function print_msg {
-    if [ "$quiet_mode" = false ]; then
-        echo "$1"
-    fi
-}
+# Verificar dependencias esenciales
+check_command pkexec
+check_command xhost
+check_command dbus-daemon
+
+# Configurar variables de entorno
+set_env_vars
+
+# Detectar la distribución y el entorno de escritorio
+detect_system
 
 # Lista de gestores de archivos en orden de prioridad
 FILE_MANAGERS=(
     "nemo" "nautilus" "thunar" "dolphin" "pcmanfm" "pcmanfm-qt" 
     "spacefm" "caja" "cutefish-filemanager" "krusader" "konqueror" 
-    "xfce4-file-manager" "pantheon-files"
+    "xfce4-file-manager" "pantheon-files" "mc" "ranger"
 )
+
+# Detectar el gestor de archivos disponible
 for manager in "${FILE_MANAGERS[@]}"; do
     if command -v "$manager" &> /dev/null; then
         FILE_MANAGER="$manager"
@@ -47,14 +104,6 @@ if [ -z "$FILE_MANAGER" ]; then
 fi
 
 # Detectar la versión del gestor de archivos
-function get_file_manager_version {
-    if command -v "$FILE_MANAGER" &> /dev/null; then
-        "$FILE_MANAGER" --version | head -n 1 | awk '{print $2}'
-    else
-        echo "unknown"
-    fi
-}
-
 FILE_MANAGER_VERSION=$(get_file_manager_version)
 print_msg "Gestor de archivos detectado: $FILE_MANAGER (versión $FILE_MANAGER_VERSION)"
 
@@ -70,79 +119,6 @@ if [ "$quiet_mode" = false ]; then
         exit 0
     fi
 fi
-
-# Configurar XDG_RUNTIME_DIR temporal para root
-if [ "$EUID" -eq 0 ]; then
-    export XDG_RUNTIME_DIR="/run/user/0"
-    if [ ! -d "$XDG_RUNTIME_DIR" ]; then
-        if ! mkdir -p "$XDG_RUNTIME_DIR"; then
-            print_msg "Error: No se pudo crear el directorio XDG_RUNTIME_DIR."
-            exit 1
-        fi
-        chmod 0700 "$XDG_RUNTIME_DIR"
-        chown root:root "$XDG_RUNTIME_DIR"
-    fi
-else
-    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-fi
-
-# Verificar si DISPLAY está configurado
-if [ -z "$DISPLAY" ]; then
-    print_msg "Error: La variable DISPLAY no está configurada."
-    exit 1
-fi
-
-# Verificar si XAUTHORITY está configurado
-if [ -z "$XAUTHORITY" ]; then
-    if [ -f "$HOME/.Xauthority" ]; then
-        export XAUTHORITY="$HOME/.Xauthority"
-    else
-        print_msg "Error: No se encontró el archivo XAUTHORITY."
-        exit 1
-    fi
-fi
-
-# Configurar una nueva sesión de DBUS si es root
-if [ "$EUID" -eq 0 ]; then
-    export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
-    if [ ! -S "$XDG_RUNTIME_DIR/bus" ]; then
-        if ! dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork; then
-            print_msg "Error: No se pudo iniciar el daemon de DBUS."
-            exit 1
-        fi
-    fi
-else
-    # Obtener el ID del bus de sesión para usuarios no root
-    DBUS_SESSION_ID=$(cat /proc/$(pgrep -u "$LOGNAME" dbus-daemon | head -n 1)/environ 2>/dev/null | tr '\0' '\n' | grep DBUS_SESSION_BUS_ADDRESS | cut -d= -f2-)
-    if [ -n "$DBUS_SESSION_ID" ]; then
-        export DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_ID"
-    else
-        print_msg "Error: No se pudo obtener el DBUS_SESSION_BUS_ADDRESS."
-        exit 1
-    fi
-fi
-
-# Verificar si se puede ejecutar pkexec
-if ! command -v pkexec &> /dev/null; then
-    print_msg "Error: pkexec no está instalado o no se encuentra en el PATH."
-    exit 1
-fi
-
-# Permitir conexiones X11 para root
-if ! xhost +SI:localuser:root &> /dev/null; then
-    print_msg "Advertencia: No se pudo permitir el acceso X11 para root."
-fi
-
-# Detectar el tema gráfico en uso
-if [ -f "$HOME/.config/gtk-3.0/settings.ini" ]; then
-    export GTK_THEME=$(grep 'gtk-theme-name' "$HOME/.config/gtk-3.0/settings.ini" | cut -d'=' -f2)
-else
-    export GTK_THEME="Adwaita"  # Tema predeterminado
-fi
-
-# Configurar locale basado en el sistema
-export LC_ALL=$(locale | grep 'LC_ALL' | cut -d'=' -f2 | tr -d '"' || echo "en_US.UTF-8")
-export LANG=$(locale | grep 'LANG' | cut -d'=' -f2 | tr -d '"' || echo "en_US.UTF-8")
 
 # Crear un enlace simbólico para abrir el gestor de archivos como root
 LINK_PATH="/usr/local/bin/filemanager-root"
