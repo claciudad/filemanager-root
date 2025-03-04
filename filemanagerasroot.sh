@@ -1,7 +1,14 @@
 #!/bin/bash
 
-# Activar modo de depuración
-# set -x  # Descomentar para activar modo de depuración
+# Script: filemanager-root
+# Descripción: Permite ejecutar un gestor de archivos con privilegios de root.
+# Uso: filemanager-root [-q] [ruta]
+#   -q: Modo silencioso (no muestra mensajes).
+#   ruta: Ruta opcional para abrir en el gestor de archivos.
+# Ejemplo: filemanager-root -q /etc
+
+# Activar modo de depuración (descomentar para debug)
+# set -x
 
 # Asegurar que tenemos el PATH completo
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
@@ -21,28 +28,35 @@ function print_msg {
 }
 
 # Lista de gestores de archivos en orden de prioridad
-if command -v nemo &> /dev/null; then
-    FILE_MANAGER="nemo"
-elif command -v nautilus &> /dev/null; then
-    FILE_MANAGER="nautilus"
-elif command -v thunar &> /dev/null; then
-    FILE_MANAGER="thunar"
-elif command -v dolphin &> /dev/null; then
-    FILE_MANAGER="dolphin"
-elif command -v pcmanfm &> /dev/null; then
-    FILE_MANAGER="pcmanfm"
-elif command -v cutefish-filemanager &> /dev/null; then
-    FILE_MANAGER="cutefish-filemanager"
-else
-    print_msg "No se detectó un gestor de archivos compatible."
-    exit 1
-fi
+FILE_MANAGERS=(
+    "nemo" "nautilus" "thunar" "dolphin" "pcmanfm" "pcmanfm-qt" 
+    "spacefm" "caja" "cutefish-filemanager" "krusader" "konqueror" 
+    "xfce4-file-manager" "pantheon-files"
+)
+for manager in "${FILE_MANAGERS[@]}"; do
+    if command -v "$manager" &> /dev/null; then
+        FILE_MANAGER="$manager"
+        break
+    fi
+done
 
 # Validar que el gestor de archivos exista
 if [ -z "$FILE_MANAGER" ]; then
-    print_msg "Error: No se pudo seleccionar un gestor de archivos válido."
+    print_msg "Error: No se detectó un gestor de archivos compatible."
     exit 1
 fi
+
+# Detectar la versión del gestor de archivos
+function get_file_manager_version {
+    if command -v "$FILE_MANAGER" &> /dev/null; then
+        "$FILE_MANAGER" --version | head -n 1 | awk '{print $2}'
+    else
+        echo "unknown"
+    fi
+}
+
+FILE_MANAGER_VERSION=$(get_file_manager_version)
+print_msg "Gestor de archivos detectado: $FILE_MANAGER (versión $FILE_MANAGER_VERSION)"
 
 # Avisar antes de realizar cambios
 print_msg "Este script realizará los siguientes cambios en el sistema:"
@@ -119,11 +133,16 @@ if ! xhost +SI:localuser:root &> /dev/null; then
     print_msg "Advertencia: No se pudo permitir el acceso X11 para root."
 fi
 
-# Forzar el uso de un tema de iconos y entorno gráfico para evitar problemas visuales
-export QT_QPA_PLATFORMTHEME="gtk2"
-export XCURSOR_THEME="Adwaita"
-export LC_ALL="en_US.UTF-8"
-export LANG="en_US.UTF-8"
+# Detectar el tema gráfico en uso
+if [ -f "$HOME/.config/gtk-3.0/settings.ini" ]; then
+    export GTK_THEME=$(grep 'gtk-theme-name' "$HOME/.config/gtk-3.0/settings.ini" | cut -d'=' -f2)
+else
+    export GTK_THEME="Adwaita"  # Tema predeterminado
+fi
+
+# Configurar locale basado en el sistema
+export LC_ALL=$(locale | grep 'LC_ALL' | cut -d'=' -f2 | tr -d '"' || echo "en_US.UTF-8")
+export LANG=$(locale | grep 'LANG' | cut -d'=' -f2 | tr -d '"' || echo "en_US.UTF-8")
 
 # Crear un enlace simbólico para abrir el gestor de archivos como root
 LINK_PATH="/usr/local/bin/filemanager-root"
@@ -132,7 +151,7 @@ if [ -L "$LINK_PATH" ]; then
     if [ "$quiet_mode" = false ]; then
         read respuesta
         if [[ "$respuesta" == "s" || "$respuesta" == "S" ]]; then
-            sudo rm "$LINK_PATH"
+            pkexec rm "$LINK_PATH"
             print_msg "Enlace simbólico existente eliminado."
         else
             print_msg "Operación cancelada."
@@ -140,17 +159,17 @@ if [ -L "$LINK_PATH" ]; then
         fi
     fi
 fi
-sudo ln -s "$(realpath "$0")" "$LINK_PATH"
+pkexec ln -s "$(realpath "$0")" "$LINK_PATH"
 print_msg "Enlace simbólico creado: use 'filemanager-root' para abrir el gestor de archivos como root."
 
 # Crear un archivo .desktop para abrir el gestor de archivos como root
 DESKTOP_FILE="/usr/share/applications/filemanager-root.desktop"
 if [ ! -f "$DESKTOP_FILE" ]; then
-    sudo bash -c "cat <<EOF > $DESKTOP_FILE
+    pkexec bash -c "cat <<EOF > $DESKTOP_FILE
 [Desktop Entry]
 Version=1.0
 Name=File Manager Root
-Exec=pkexec env DISPLAY=$DISPLAY XAUTHORITY=$XAUTHORITY XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS QT_QPA_PLATFORMTHEME=$QT_QPA_PLATFORMTHEME XCURSOR_THEME=$XCURSOR_THEME LC_ALL=$LC_ALL LANG=$LANG $FILE_MANAGER
+Exec=pkexec env DISPLAY=$DISPLAY XAUTHORITY=$XAUTHORITY XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS GTK_THEME=$GTK_THEME LC_ALL=$LC_ALL LANG=$LANG $FILE_MANAGER
 Icon=utilities-terminal
 Terminal=false
 Type=Application
@@ -160,7 +179,13 @@ EOF"
 fi
 
 # Ejecutar el gestor de archivos como root usando pkexec
-if ! pkexec env DISPLAY=$DISPLAY XAUTHORITY=$XAUTHORITY XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS QT_QPA_PLATFORMTHEME=$QT_QPA_PLATFORMTHEME XCURSOR_THEME=$XCURSOR_THEME LC_ALL=$LC_ALL LANG=$LANG "$FILE_MANAGER" "$@"; then
+if ! pkexec env DISPLAY=$DISPLAY XAUTHORITY=$XAUTHORITY XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS GTK_THEME=$GTK_THEME LC_ALL=$LC_ALL LANG=$LANG "$FILE_MANAGER" "$@"; then
     print_msg "Error: No se pudo abrir el gestor de archivos con privilegios de root."
-    exit 1
+    if ask_retry; then
+        # Reintentar la operación
+        pkexec env DISPLAY=$DISPLAY XAUTHORITY=$XAUTHORITY XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS GTK_THEME=$GTK_THEME LC_ALL=$LC_ALL LANG=$LANG "$FILE_MANAGER" "$@"
+    else
+        print_msg "Operación cancelada."
+        exit 1
+    fi
 fi
